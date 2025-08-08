@@ -16,24 +16,22 @@ private:
     unordered_map<string, string> tokenToEmail;       // token -> email
     unordered_map<string, string> emailToToken;       // email -> token
 
-    bool createsCycle(const string& referrerToken, const string& candidateToken) {
-        unordered_set<string> visited;
-        stack<string> stk;
-        stk.push(candidateToken);
+    unordered_map<string,string> parent;    // maping token to parent token
 
-        while (!stk.empty()) {
-            string current = stk.top();
-            stk.pop();
-            if (current == referrerToken) return true;
-            visited.insert(current);
-            for (const auto& neighbor : graph[current]) {
-                if (visited.find(neighbor) == visited.end()) {
-                    stk.push(neighbor);
-                }
-            }
-        }
-        return false;
+    string find(const string& token) {
+        if (parent[token] != token)
+            parent[token] = find(parent[token]);
+        return parent[token];
     }
+
+    bool unionSet(const string& a, const string& b) {
+        string rootA = find(a);
+        string rootB = find(b);
+        if (rootA == rootB) return false; // Cycle detected
+        parent[rootB] = rootA;
+        return true;
+    }
+
 
     unsigned long long fnv1aHash(const string& str) {
         const unsigned long long FNV_offset_basis = 14695981039346656037ULL;
@@ -68,6 +66,7 @@ public:
         graph[token] = {};
         tokenToEmail[token] = email;
         emailToToken[email] = token;
+        parent[token] = token;
     }
 
     // Add referral link by emails
@@ -88,7 +87,7 @@ public:
             throw invalid_argument("Candidate already has a referrer.");
         }
 
-        if (createsCycle(referrerToken, candidateToken)) {
+        if (!unionSet(referrerToken, candidateToken)) {
             throw invalid_argument("Adding this referral would create a cycle.");
         }
 
@@ -114,17 +113,16 @@ public:
 int main() {
     ReferralGraph g;
 
-    // Add users with emails
     g.addUser("krish@gmail.com");
-    g.addUser("bob@gamil.com");
-    g.addUser("charlie@gamil.com");
+    g.addUser("bob@gmail.com");
+    g.addUser("charlie@gmail.com");
 
     // Add referral relationships by email
-    g.addReferralByEmail("alice@gmail.com", "bob@gmail.com");
-
-    // Print direct referrals of Alice
-    auto referrals = g.getDirectReferralsByEmail("alice@example.com");
-    cout << "alice@example.com referred: ";
+    g.addReferralByEmail("krish@gmail.com", "bob@gmail.com");
+    
+    // Print direct referrals of krish
+    auto referrals = g.getDirectReferralsByEmail("krish@gmail.com");
+    cout << "krish@gmail.com referred: ";
     for (const auto& r : referrals) {
         cout << r << " ";
     }
@@ -132,3 +130,4 @@ int main() {
 
     return 0;
 }
+
