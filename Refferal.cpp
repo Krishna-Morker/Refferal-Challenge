@@ -17,7 +17,7 @@ private:
     unordered_map<string, string> emailToToken;       // email -> token
 
     unordered_map<string,string> parent;    // maping token to parent token
-
+    unordered_map<string,int> size;     // size of the component for union-find
     string find(const string& token) {
         if (parent[token] != token)
             parent[token] = find(parent[token]);
@@ -29,6 +29,7 @@ private:
         string rootB = find(b);
         if (rootA == rootB) return false; // Cycle detected
         parent[rootB] = rootA;
+        size[rootA] += size[rootB];
         return true;
     }
 
@@ -49,7 +50,12 @@ private:
         return "token_" + to_string(fnv1aHash(email));
     }
 
+    int getComponentSize(const string& token) {
+        return size[find(token)];
+    }
+
 public:
+    
     // Add user by email, generate and store token
     void addUser(const string& email) {
         if (emailToToken.find(email) != emailToToken.end()) {
@@ -66,7 +72,20 @@ public:
         graph[token] = {};
         tokenToEmail[token] = email;
         emailToToken[email] = token;
+        size[token]=1;
         parent[token] = token;
+    }
+
+    // Get referral count by email
+    int getRefferalCount(const string& email) {
+        if (emailToToken.find(email) == emailToToken.end()) {
+            throw invalid_argument("User not found: " + email);
+        }
+        string token = emailToToken[email];
+        if (graph.find(token) == graph.end()) {
+            return 0; // No referrals
+        }
+        return getComponentSize(token) - 1;
     }
 
     // Add referral link by emails
@@ -116,10 +135,11 @@ int main() {
     g.addUser("krish@gmail.com");
     g.addUser("bob@gmail.com");
     g.addUser("charlie@gmail.com");
-
+    g.addUser("hj@gmail.com");
     // Add referral relationships by email
     g.addReferralByEmail("krish@gmail.com", "bob@gmail.com");
-    
+    g.addReferralByEmail("krish@gmail.com", "charlie@gmail.com");
+    g.addReferralByEmail("krish@gmail.com", "hj@gmail.com");
     // Print direct referrals of krish
     auto referrals = g.getDirectReferralsByEmail("krish@gmail.com");
     cout << "krish@gmail.com referred: ";
@@ -127,6 +147,8 @@ int main() {
         cout << r << " ";
     }
     cout << endl;
+
+    cout<<g.getRefferalCount("krish@gmail.com")<<endl;
 
     return 0;
 }
