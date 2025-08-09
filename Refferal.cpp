@@ -24,6 +24,8 @@ private:
     unordered_map<string,int> referralCount;
     map<int,unordered_set<string>,greater<int>> referaltotoken; // map referral count to tokens
 
+    unordered_set<string> indegree_zero; // in-degree for each token
+
 
     string find(const string& token) {
         if (parent[token] != token)
@@ -61,7 +63,41 @@ private:
     }
 
 public:
-    
+
+    vector<string> findRootReferrer() {
+
+    vector<string> directReferrals;
+    unordered_set<string> visited;
+    for (auto &email : tokenToEmail) {
+        string token = email.first;
+        if (indegree_zero.count(token) > 0) {
+           
+            
+            stack<string> s;
+            s.push(token);
+            directReferrals.push_back(tokenToEmail[token]);
+
+            while (!s.empty()) {
+                string current = s.top();
+                s.pop();
+
+                if (visited.count(current)) continue;
+                visited.insert(current);
+
+                for (const auto& child : graph[current]) {
+                    s.push(child);
+                }
+            }
+
+            if (visited.size() == tokenToEmail.size()) {
+                break;
+            }
+        }
+    }
+
+    return directReferrals; // No such referrer found
+}
+
     // Add user by email, generate and store token
     void addUser(const string& email) {
         if (emailToToken.find(email) != emailToToken.end()) {
@@ -80,7 +116,7 @@ public:
         emailToToken[email] = token;
         size[token]=1;
         parent[token] = token;
-
+        indegree_zero.insert(token); // add to indegree zero set
         // initialize referral count
         referralCount[token] = 0;
     }
@@ -121,7 +157,7 @@ public:
        
         graph[referrerToken].push_back(candidateToken);
         referredBy[candidateToken] = referrerToken;
-
+        indegree_zero.erase(candidateToken);
 
         // Update referralCount for referrer and all its ancestors
         string cur = referrerToken;
@@ -186,7 +222,7 @@ int main() {
     g.addUser("hj@gmail.com");
 
     // Add referral relationships by email
-    g.addReferralByEmail("krish@gmail.com", "bob@gmail.com");
+    // g.addReferralByEmail("krish@gmail.com", "bob@gmail.com");
     g.addReferralByEmail("krish@gmail.com", "hj@gmail.com");
     g.addReferralByEmail("bob@gmail.com", "charlie@gmail.com");
 
@@ -201,7 +237,7 @@ int main() {
     cout << "krish total referrals: " << g.getRefferalCount("krish@gmail.com") << endl; // expect 3 (bob,hj,charlie)
     cout << "bob total referrals: " << g.getRefferalCount("bob@gmail.com") << endl;     // expect 1 (charlie)
     cout << "charlie total referrals: " << g.getRefferalCount("charlie@gmail.com") << endl; // 0
-    auto res=g.topKReferrers(2); // should return top 2 referrers
+    auto res=g.findRootReferrer(); // should return top 2 referrers
     for (const auto& r : res) {
         cout << r << " ";
     }
