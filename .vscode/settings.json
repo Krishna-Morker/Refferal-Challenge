@@ -3,6 +3,8 @@
         "unordered_map": "cpp",
         "format": "cpp",
         "xstring": "cpp",
-        "stdexcept": "cpp"
+        "stdexcept": "cpp",
+        "iostream": "cpp",
+        "ostream": "cpp"
     }
 }

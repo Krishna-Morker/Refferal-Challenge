@@ -16,8 +16,12 @@ private:
     unordered_map<string, string> tokenToEmail;       // token -> email
     unordered_map<string, string> emailToToken;       // email -> token
 
-    unordered_map<string,string> parent;    // maping token to parent token
-    unordered_map<string,int> size;     // size of the component for union-find
+    unordered_map<string,string> parent;    // mapping token to parent token (DSU)
+    unordered_map<string,int> size;         // size of the component for union-find
+
+    // NEW: store referral count (direct + indirect descendants) per token
+    unordered_map<string,int> referralCount;
+
     string find(const string& token) {
         if (parent[token] != token)
             parent[token] = find(parent[token]);
@@ -32,7 +36,6 @@ private:
         size[rootA] += size[rootB];
         return true;
     }
-
 
     unsigned long long fnv1aHash(const string& str) {
         const unsigned long long FNV_offset_basis = 14695981039346656037ULL;
@@ -51,7 +54,7 @@ private:
     }
 
     int getComponentSize(const string& token) {
-        return size[find(token)];
+        return size[(token)];
     }
 
 public:
@@ -74,18 +77,19 @@ public:
         emailToToken[email] = token;
         size[token]=1;
         parent[token] = token;
+
+        // initialize referral count
+        referralCount[token] = 0;
     }
 
-    // Get referral count by email
+    // Get referral count by email (direct + indirect descendants)
     int getRefferalCount(const string& email) {
         if (emailToToken.find(email) == emailToToken.end()) {
             throw invalid_argument("User not found: " + email);
         }
         string token = emailToToken[email];
-        if (graph.find(token) == graph.end()) {
-            return 0; // No referrals
-        }
-        return getComponentSize(token) - 1;
+        // return stored referral count (O(1))
+        return referralCount[token];
     }
 
     // Add referral link by emails
@@ -110,8 +114,19 @@ public:
             throw invalid_argument("Adding this referral would create a cycle.");
         }
 
+        // Add edge in directed graph
         graph[referrerToken].push_back(candidateToken);
         referredBy[candidateToken] = referrerToken;
+
+        
+
+        // Update referralCount for referrer and all its ancestors
+        string cur = referrerToken;
+        while (true) {
+            referralCount[cur] += 1;
+            if (referredBy.find(cur) == referredBy.end()) break; // reached top/root
+            cur = referredBy[cur];
+        }
     }
 
     // Get direct referrals by email
@@ -136,10 +151,12 @@ int main() {
     g.addUser("bob@gmail.com");
     g.addUser("charlie@gmail.com");
     g.addUser("hj@gmail.com");
+
     // Add referral relationships by email
     g.addReferralByEmail("krish@gmail.com", "bob@gmail.com");
-    g.addReferralByEmail("krish@gmail.com", "charlie@gmail.com");
     g.addReferralByEmail("krish@gmail.com", "hj@gmail.com");
+    g.addReferralByEmail("bob@gmail.com", "charlie@gmail.com");
+
     // Print direct referrals of krish
     auto referrals = g.getDirectReferralsByEmail("krish@gmail.com");
     cout << "krish@gmail.com referred: ";
@@ -148,8 +165,9 @@ int main() {
     }
     cout << endl;
 
-    cout<<g.getRefferalCount("krish@gmail.com")<<endl;
+    cout << "krish total referrals: " << g.getRefferalCount("krish@gmail.com") << endl; // expect 3 (bob,hj,charlie)
+    cout << "bob total referrals: " << g.getRefferalCount("bob@gmail.com") << endl;     // expect 1 (charlie)
+    cout << "charlie total referrals: " << g.getRefferalCount("charlie@gmail.com") << endl; // 0
 
     return 0;
 }
-
