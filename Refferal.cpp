@@ -1,5 +1,6 @@
 #include <iostream>
 #include <unordered_map>
+#include <map>
 #include <unordered_set>
 #include <vector>
 #include <stack>
@@ -21,6 +22,8 @@ private:
 
     // NEW: store referral count (direct + indirect descendants) per token
     unordered_map<string,int> referralCount;
+    map<int,unordered_set<string>,greater<int>> referaltotoken; // map referral count to tokens
+
 
     string find(const string& token) {
         if (parent[token] != token)
@@ -115,18 +118,48 @@ public:
         }
 
         // Add edge in directed graph
+       
         graph[referrerToken].push_back(candidateToken);
         referredBy[candidateToken] = referrerToken;
 
-        
 
         // Update referralCount for referrer and all its ancestors
         string cur = referrerToken;
         while (true) {
+            long long count=getRefferalCount(tokenToEmail[cur]);
+            if(count > 0) {
+                referaltotoken[count].erase(cur);
+                if (referaltotoken[count].empty()) {
+                    referaltotoken.erase(count);   // optional: clean up empty set
+                }
+            }
             referralCount[cur] += 1;
+            // if(referralCount[cur] > 0) {
+                referaltotoken[referralCount[cur]].insert(cur);
+            // }
+
             if (referredBy.find(cur) == referredBy.end()) break; // reached top/root
             cur = referredBy[cur];
         }
+    }
+
+    unordered_set<string> topKReferrers(int k) {
+        if(k>referredBy.size()) {
+            throw invalid_argument("k exceeds the number of users.");
+        }
+        if (k <= 0) {
+            return {}; // return empty vector for non-positive k
+        }
+        unordered_set<string> result;
+        for (const auto& entry : referaltotoken) {
+            if (entry.first > 0) { // only consider positive referral counts
+                for (const auto& token : entry.second) {
+                    result.insert(tokenToEmail[token]);
+                    if (result.size() == k) return result; // return top k
+                }
+            }
+        }
+        return result; // return all if less than k
     }
 
     // Get direct referrals by email
@@ -168,6 +201,12 @@ int main() {
     cout << "krish total referrals: " << g.getRefferalCount("krish@gmail.com") << endl; // expect 3 (bob,hj,charlie)
     cout << "bob total referrals: " << g.getRefferalCount("bob@gmail.com") << endl;     // expect 1 (charlie)
     cout << "charlie total referrals: " << g.getRefferalCount("charlie@gmail.com") << endl; // 0
+    auto res=g.topKReferrers(2); // should return top 2 referrers
+    for (const auto& r : res) {
+        cout << r << " ";
+    }
+    cout << endl;
+    
 
     return 0;
 }
