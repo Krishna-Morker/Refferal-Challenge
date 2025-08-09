@@ -5,7 +5,9 @@
 #include <vector>
 #include <stack>
 #include <stdexcept>
+#include <queue>
 #include <string>
+#include <iomanip>
 
 using namespace std;
 
@@ -63,40 +65,154 @@ private:
     }
 
 public:
+    // Helper: return list of all tokens (nodes)
+    vector<string> getAllTokens() const {
+        vector<string> nodes;
+        nodes.reserve(tokenToEmail.size());
+        for (const auto &p : tokenToEmail) nodes.push_back(p.first);
+        return nodes;
+    }
+
+    // Build reversed adjacency (contains all nodes, even if no incoming/outgoing edges)
+    unordered_map<string, vector<string>> buildReverseGraph() const {
+        unordered_map<string, vector<string>> r;
+        // ensure every node exists
+        for (const auto &p : tokenToEmail) {
+            r[p.first] = {};
+        }
+        for (const auto &kv : graph) {
+            const string &u = kv.first;
+            for (const string &v : kv.second) {
+                r[v].push_back(u);
+            }
+        }
+        return r;
+    }
+
+    // BFS that returns pair: dist map and sigma map (number of shortest paths)
+    // NOTE: initialize dist and sigma for ALL nodes (tokenToEmail), not just keys in adj
+    pair<unordered_map<string,int>, unordered_map<string,double>> 
+    bfs_count_paths(const string &source,
+                    const unordered_map<string, vector<string>> &adj) {
+        unordered_map<string,int> dist;
+        unordered_map<string,double> sigma;
+
+        // initialize for all nodes so nodes with 0-degree are included
+        for (const auto &p : tokenToEmail) {
+            dist[p.first] = -1;
+            sigma[p.first] = 0.0;
+        }
+
+        queue<string> q;
+        if (dist.find(source) == dist.end()) {
+            // unknown source token
+            return {dist, sigma};
+        }
+
+        dist[source] = 0;
+        sigma[source] = 1.0;
+        q.push(source);
+
+        while (!q.empty()) {
+            string u = q.front(); q.pop();
+            auto it = adj.find(u);
+            if (it == adj.end()) continue;
+            for (const string &w : it->second) {
+                if (dist[w] < 0) {
+                    dist[w] = dist[u] + 1;
+                    q.push(w);
+                }
+                if (dist[w] == dist[u] + 1) {
+                    sigma[w] += sigma[u];
+                }
+            }
+        }
+        return {dist, sigma};
+    }
+
+    // Check if v is on the shortest path from s to t
+    pair<bool,double> isOnShortestPath(
+        const string &s, const string &t, const string &v,
+        const unordered_map<string, vector<string>> &adj,
+        const unordered_map<string, vector<string>> &rgraph) {
+
+        auto ds_sigma = bfs_count_paths(s, adj);
+        auto dtrev_sigmarev = bfs_count_paths(t, rgraph); // BFS from t on reversed graph
+
+        auto &dist_s = ds_sigma.first;
+        auto &sigma_s = ds_sigma.second;
+        auto &dist_trev = dtrev_sigmarev.first;
+        auto &sigma_rev = dtrev_sigmarev.second;
+
+        // check reachable and distance condition
+        if (dist_s.find(t) == dist_s.end() || dist_s[t] < 0) {
+            return {false, 0.0}; // no s->t path at all
+        }
+        if (dist_s.find(v) == dist_s.end() || dist_trev.find(v) == dist_trev.end()) {
+            return {false, 0.0};
+        }
+        if (dist_s[v] < 0 || dist_trev[v] < 0) return {false, 0.0};
+
+        if (dist_s[v] + dist_trev[v] != dist_s[t]) return {false, 0.0};
+
+        double paths_through_v = sigma_s[v] * sigma_rev[v]; // number of s->t shortest paths going through v
+        double total_paths = sigma_s[t];
+        if (total_paths == 0.0) return {false, 0.0}; // safety check
+
+        double fraction = paths_through_v / total_paths;
+        return {paths_through_v > 0.0, fraction};
+    }
+
+    // Public wrapper: take emails, map -> tokens, build reverse graph, call isOnShortestPath
+    pair<bool,double> isOnShortestPathByEmail(const string &sEmail, const string &tEmail, const string &vEmail) {
+        if (emailToToken.find(sEmail) == emailToToken.end()) 
+            throw invalid_argument("Source email not found: " + sEmail);
+        if (emailToToken.find(tEmail) == emailToToken.end()) 
+            throw invalid_argument("Target email not found: " + tEmail);
+        if (emailToToken.find(vEmail) == emailToToken.end()) 
+            throw invalid_argument("Candidate (v) email not found: " + vEmail);
+
+        string s = emailToToken[sEmail];
+        string t = emailToToken[tEmail];
+        string v = emailToToken[vEmail];
+
+        auto rgraph = buildReverseGraph();
+        return isOnShortestPath(s, t, v, graph, rgraph);
+    }
 
     vector<string> findRootReferrer() {
 
-    vector<string> directReferrals;
-    unordered_set<string> visited;
-    for (auto &email : tokenToEmail) {
-        string token = email.first;
-        if (indegree_zero.count(token) > 0) {
-           
-            
-            stack<string> s;
-            s.push(token);
-            directReferrals.push_back(tokenToEmail[token]);
+        vector<string> directReferrals;
+        unordered_set<string> visited;
+        for (auto &email : tokenToEmail) {
+            string token = email.first;
+            if (indegree_zero.count(token) > 0) {
 
-            while (!s.empty()) {
-                string current = s.top();
-                s.pop();
 
-                if (visited.count(current)) continue;
-                visited.insert(current);
+                stack<string> s;
+                s.push(token);
+                directReferrals.push_back(tokenToEmail[token]);
 
-                for (const auto& child : graph[current]) {
-                    s.push(child);
+                while (!s.empty()) {
+                    string current = s.top();
+                    s.pop();
+
+                    if (visited.count(current)) continue;
+                    visited.insert(current);
+
+                    for (const auto& child : graph[current]) {
+                        s.push(child);
+                    }
+                }
+
+                if (visited.size() == tokenToEmail.size()) {
+                    break;
                 }
             }
-
-            if (visited.size() == tokenToEmail.size()) {
-                break;
-            }
         }
-    }
 
-    return directReferrals; // No such referrer found
-}
+        return directReferrals; // No such referrer found
+    }
 
     // Add user by email, generate and store token
     void addUser(const string& email) {
@@ -154,7 +270,7 @@ public:
         }
 
         // Add edge in directed graph
-       
+
         graph[referrerToken].push_back(candidateToken);
         referredBy[candidateToken] = referrerToken;
         indegree_zero.erase(candidateToken);
@@ -221,10 +337,11 @@ int main() {
     g.addUser("charlie@gmail.com");
     g.addUser("hj@gmail.com");
 
-    // Add referral relationships by email
-    // g.addReferralByEmail("krish@gmail.com", "bob@gmail.com");
+    // Build referrals
     g.addReferralByEmail("krish@gmail.com", "hj@gmail.com");
     g.addReferralByEmail("bob@gmail.com", "charlie@gmail.com");
+    // Also connect krish -> bob to produce a path krish->bob->charlie
+    g.addReferralByEmail("krish@gmail.com", "bob@gmail.com");
 
     // Print direct referrals of krish
     auto referrals = g.getDirectReferralsByEmail("krish@gmail.com");
@@ -234,15 +351,20 @@ int main() {
     }
     cout << endl;
 
-    cout << "krish total referrals: " << g.getRefferalCount("krish@gmail.com") << endl; // expect 3 (bob,hj,charlie)
-    cout << "bob total referrals: " << g.getRefferalCount("bob@gmail.com") << endl;     // expect 1 (charlie)
-    cout << "charlie total referrals: " << g.getRefferalCount("charlie@gmail.com") << endl; // 0
-    auto res=g.findRootReferrer(); // should return top 2 referrers
-    for (const auto& r : res) {
-        cout << r << " ";
-    }
-    cout << endl;
-    
+    cout << "krish total referrals: " << g.getRefferalCount("krish@gmail.com") << endl;
+    cout << "bob total referrals: " << g.getRefferalCount("bob@gmail.com") << endl;
+    cout << "charlie total referrals: " << g.getRefferalCount("charlie@gmail.com") << endl;
 
+    // Now check some s, t, v triples
+    cout << fixed << setprecision(4);
+    auto res1 = g.isOnShortestPathByEmail("krish@gmail.com", "charlie@gmail.com", "bob@gmail.com");
+    cout << "Is 'bob' on a shortest path krish->charlie? " << (res1.first ? "YES" : "NO") 
+         << "  fraction=" << res1.second << "\n";
+
+    auto res2 = g.isOnShortestPathByEmail("krish@gmail.com", "charlie@gmail.com", "hj@gmail.com");
+    cout << "Is 'hj' on a shortest path krish->charlie? " << (res2.first ? "YES" : "NO") 
+         << "  fraction=" << res2.second << "\n";
+
+ 
     return 0;
 }
