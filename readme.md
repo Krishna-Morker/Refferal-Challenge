@@ -1,90 +1,51 @@
-Key operations and their time complexities:
+Referral Graph System
+Overview
+This C++ program models a referral system where users can refer others to join a network. It implements a directed acyclic graph (DAG) to represent referral relationships and provides various analytical tools to measure and optimize referral program performance. Key features include user management, referral relationship tracking, shortest path analysis, top referrer identification, growth simulation, and bonus optimization.
 
-User Management
+Features
+Core Functionality
+User Management: Add users with deterministic token generation
 
-addUser(): O(1) average case (hash operations)
+Referral Tracking: Create referral relationships with cycle prevention
 
-Token generation: O(L) where L = email length
+Referral Analytics:
 
-Referral Operations
+Get direct referrals for any user
 
-addReferral(): O(h + log n)
+Calculate total referrals (direct + indirect)
 
-h = height of referral tree
+Identify top referrers
 
-n = number of users
+Path Analysis: Determine if a user lies on the shortest referral path between two others
 
-Involves DSU union (O(α(n))) and referral count updates
+Advanced Capabilities
+Growth Simulation: Model expected referral growth over time
 
-Graph Queries
+Target Projection: Calculate days needed to reach hiring targets
 
-getDirectReferrals(): O(1) + O(d) where d = direct referrals
+Bonus Optimization: Determine minimum bonus required to meet hiring goals within time constraints
 
-topKReferrers(): O(n) worst-case (n = total users)
-
-Path Analysis
-
-isOnShortestPath(): O(V + E)
-
-V = number of vertices
-
-E = number of edges
-
-Uses BFS for shortest path calculations
-
-Simulations
-
-simulate(): O(days²)
-
-days_to_target(): O(max_days_limit²)
-
-min_bonus_for_target(): O(log(maxBonus) * days²)
-
-AI/ML Techniques Used
+Time Complexity Analysis
+Operation	Time Complexity	Description
+addUser()	O(L)	L = email length (token generation)
+addReferral()	O(h + log n)	h = tree height, n = users
+getDirectReferrals()	O(1) + O(d)	d = direct referrals
+topKReferrers()	O(n)	n = total users
+isOnShortestPath()	O(V + E)	V = vertices, E = edges
+simulate()	O(days²)	days = simulation period
+min_bonus_for_target()	O(log(maxBonus) * days²)	days = target period
+AI/ML Techniques
 Probabilistic Modeling
-
-Binomial distribution with capacity constraints
-
-Models user adoption probability (p) and referral limits
-
-Optimization Algorithms
-
-Exponential + binary search for bonus optimization
-
-Finds minimum bonus to hit hiring targets
-
-Statistical Computations
-
-Cumulative distribution functions (CDF)
-
-Expected value calculations for growth projections
-
-Key Components
-Graph Representation
-
-Adjacency lists for referral relationships
-
-DSU (Disjoint Set Union) for cycle detection
-
-Bidirectional email-token mapping
-
-Referral Analytics
-
-Shortest path analysis with BFS
-
-Centrality metrics (path fraction calculation)
-
-Referral count propagation through chains
-
-Growth Simulation
-
 math
 E[New Referrals] = Σ (cohortₛ × p × P(Binomial(t, p) < capacity)
-Models viral growth with capacity constraints
+Models user adoption probability (p) and referral limits
+
+Uses binomial distribution with capacity constraints
 
 Precomputes CDFs for efficient calculation
 
-Bonus Optimization
+Optimization Algorithms
+Exponential + binary search for bonus optimization
 
 Finds minimum bonus where:
 
