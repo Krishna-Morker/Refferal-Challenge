@@ -329,17 +329,6 @@ public:
         return result;
     }
 
-    // ----------------------- New: Network growth simulation -----------------------
-    // Model parameters fixed per the spec:
-    // - initial referrers: 100
-    // - capacity per referrer (lifetime successes): 10
-    // - each active referrer attempts one trial per day with probability p
-    //
-    // simulate(p, days): returns vector<long double> cum of size days+1 where cum[i] is
-    // cumulative expected referrals at end of day i (cum[0] == 0).
-    //
-    // days_to_target(p, target_total, max_days_limit=100000): returns minimal day d such that
-    // cumulative expected referrals >= target_total, or -1 if not reached within limit.
     vector<long double> simulate(long double p, int days, int initial_referrers = 100, int capacity = 10) {
         if (days < 0) return {};
         vector<long double> cumulative(days + 1, 0.0L); // cum[0] = 0
