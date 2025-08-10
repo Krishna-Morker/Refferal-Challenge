@@ -8,65 +8,78 @@
 #include <queue>
 #include <string>
 #include <iomanip>
-#include <cmath> // added for powl
+#include <cmath>       // powl, expl
+#include <functional>  // std::function
 
 using namespace std;
 
 class ReferralGraph {
 private:
-    unordered_map<string, vector<string>> graph;      // token -> direct referrals
-    unordered_map<string, string> referredBy;         // token -> referrer token
+    // --- core graph storage ---
+    unordered_map<string, vector<string>> graph;      // token -> list of direct referrals (tokens)
+    unordered_map<string, string> referredBy;         // candidate token -> referrer token
 
-    unordered_map<string, string> tokenToEmail;       // token -> email
-    unordered_map<string, string> emailToToken;       // email -> token
+    // token <-> email mappings
+    unordered_map<string, string> tokenToEmail;
+    unordered_map<string, string> emailToToken;
 
-    unordered_map<string,string> parent;    // mapping token to parent token (DSU)
-    unordered_map<string,int> size;         // size of the component for union-find
+    // DSU (used only to detect cycles robustly in unionSet)
+    unordered_map<string, string> parent;
+    unordered_map<string, int> compSize;
 
-    // NEW: store referral count (direct + indirect descendants) per token
-    unordered_map<string,int> referralCount;
-    map<int,unordered_set<string>,greater<int>> referaltotoken; // map referral count to tokens
+    // Referral counts (direct + indirect descendants) stored per token
+    unordered_map<string, int> referralCount;
+    // reverse index: referralCount -> set of tokens (keeps sorted order by count descending)
+    map<int, unordered_set<string>, greater<int>> referaltotoken;
 
-    unordered_set<string> indegree_zero; // in-degree for each token
+    // set of nodes currently with indegree 0 (useful for some algorithms)
+    unordered_set<string> indegreeZero;
 
 
-    string find(const string& token) {
-        if (parent[token] != token)
-            parent[token] = find(parent[token]);
+    // find with path compression
+    string dsu_find(const string &token) {
+        if (parent[token] != token) parent[token] = dsu_find(parent[token]);
         return parent[token];
     }
 
-    bool unionSet(const string& a, const string& b) {
-        string rootA = find(a);
-        string rootB = find(b);
-        if (rootA == rootB) return false; // Cycle detected
-        parent[rootB] = rootA;
-        size[rootA] += size[rootB];
+    // union two components; returns false if they're already in same component
+    bool dsu_union(const string &a, const string &b) {
+        string ra = dsu_find(a);
+        string rb = dsu_find(b);
+        if (ra == rb) return false;
+        parent[rb] = ra;
+        compSize[ra] += compSize[rb];
         return true;
     }
 
-    unsigned long long fnv1aHash(const string& str) {
+    // FNV-1a based deterministic token generation from an email string.
+    unsigned long long fnv1aHash(const string &s) const {
         const unsigned long long FNV_offset_basis = 14695981039346656037ULL;
         const unsigned long long FNV_prime = 1099511628211ULL;
-
-        unsigned long long hash = FNV_offset_basis;
-        for (char c : str) {
-            hash ^= static_cast<unsigned long long>(c);
-            hash *= FNV_prime;
+        unsigned long long h = FNV_offset_basis;
+        for (char c : s) {
+            h ^= static_cast<unsigned long long>(c);
+            h *= FNV_prime;
         }
-        return hash;
+        return h;
     }
 
-    string generateToken(const string& email) {
-        return "token_" + to_string(fnv1aHash(email));
+    string makeToken(const string &email) const {
+        return string("token_") + to_string(fnv1aHash(email));
     }
 
-    int getComponentSize(const string& token) {
-        return size[(token)];
+    // small utility: remove token from referaltotoken bucket if present
+    void removeFromReferalBucket(int oldCount, const string &token) {
+        auto it = referaltotoken.find(oldCount);
+        if (it == referaltotoken.end()) return;
+        it->second.erase(token);
+        if (it->second.empty()) referaltotoken.erase(it);
     }
 
 public:
-    // Helper: return list of all tokens (nodes)
+    ReferralGraph() = default;
+
+    // Return list of all tokens
     vector<string> getAllTokens() const {
         vector<string> nodes;
         nodes.reserve(tokenToEmail.size());
@@ -74,42 +87,35 @@ public:
         return nodes;
     }
 
-    // Build reversed adjacency (contains all nodes, even if no incoming/outgoing edges)
+    // Build reversed adjacency: for each node v, list of parents u where u->v
     unordered_map<string, vector<string>> buildReverseGraph() const {
-        unordered_map<string, vector<string>> r;
-        // ensure every node exists
-        for (const auto &p : tokenToEmail) {
-            r[p.first] = {};
-        }
+        unordered_map<string, vector<string>> rev;
+        for (const auto &p : tokenToEmail) rev[p.first] = {};
         for (const auto &kv : graph) {
             const string &u = kv.first;
-            for (const string &v : kv.second) {
-                r[v].push_back(u);
-            }
+            for (const string &v : kv.second) rev[v].push_back(u);
         }
-        return r;
+        return rev;
     }
 
-    // BFS that returns pair: dist map and sigma map (number of shortest paths)
-    // NOTE: initialize dist and sigma for ALL nodes (tokenToEmail), not just keys in adj
-    pair<unordered_map<string,int>, unordered_map<string,double>> 
+    // BFS that also counts number of shortest paths (sigma) from source.
+    pair<unordered_map<string,int>, unordered_map<string,double>>
     bfs_count_paths(const string &source,
                     const unordered_map<string, vector<string>> &adj) {
         unordered_map<string,int> dist;
         unordered_map<string,double> sigma;
 
-        // initialize for all nodes so nodes with 0-degree are included
+        // initialize for all nodes
         for (const auto &p : tokenToEmail) {
             dist[p.first] = -1;
             sigma[p.first] = 0.0;
         }
 
-        queue<string> q;
         if (dist.find(source) == dist.end()) {
-            // unknown source token
-            return {dist, sigma};
+            return {dist, sigma}; // unknown source
         }
 
+        queue<string> q;
         dist[source] = 0;
         sigma[source] = 1.0;
         q.push(source);
@@ -131,242 +137,164 @@ public:
         return {dist, sigma};
     }
 
-    // Check if v is on the shortest path from s to t
-    pair<bool,double> isOnShortestPath(
-        const string &s, const string &t, const string &v,
-        const unordered_map<string, vector<string>> &adj,
-        const unordered_map<string, vector<string>> &rgraph) {
+    // Check if v is on shortest paths from s to t; returns (onPath, fractionOfShortestPathsThroughV)
+    pair<bool,double> isOnShortestPath(const string &s, const string &t, const string &v,
+                                       const unordered_map<string, vector<string>> &adj,
+                                       const unordered_map<string, vector<string>> &revAdj) {
+        auto ds = bfs_count_paths(s, adj);
+        auto dtRev = bfs_count_paths(t, revAdj);
 
-        auto ds_sigma = bfs_count_paths(s, adj);
-        auto dtrev_sigmarev = bfs_count_paths(t, rgraph); // BFS from t on reversed graph
+        auto &distS = ds.first;
+        auto &sigmaS = ds.second;
+        auto &distTrev = dtRev.first;
+        auto &sigmaRev = dtRev.second;
 
-        auto &dist_s = ds_sigma.first;
-        auto &sigma_s = ds_sigma.second;
-        auto &dist_trev = dtrev_sigmarev.first;
-        auto &sigma_rev = dtrev_sigmarev.second;
+        if (distS.find(t) == distS.end() || distS[t] < 0) return {false, 0.0};
+        if (distS.find(v) == distS.end() || distTrev.find(v) == distTrev.end()) return {false, 0.0};
+        if (distS[v] < 0 || distTrev[v] < 0) return {false, 0.0};
+        if (distS[v] + distTrev[v] != distS[t]) return {false, 0.0};
 
-        // check reachable and distance condition
-        if (dist_s.find(t) == dist_s.end() || dist_s[t] < 0) {
-            return {false, 0.0}; // no s->t path at all
-        }
-        if (dist_s.find(v) == dist_s.end() || dist_trev.find(v) == dist_trev.end()) {
-            return {false, 0.0};
-        }
-        if (dist_s[v] < 0 || dist_trev[v] < 0) return {false, 0.0};
-
-        if (dist_s[v] + dist_trev[v] != dist_s[t]) return {false, 0.0};
-
-        double paths_through_v = sigma_s[v] * sigma_rev[v]; // number of s->t shortest paths going through v
-        double total_paths = sigma_s[t];
-        if (total_paths == 0.0) return {false, 0.0}; // safety check
-
-        double fraction = paths_through_v / total_paths;
-        return {paths_through_v > 0.0, fraction};
+        double pathsThroughV = sigmaS[v] * sigmaRev[v];
+        double totalPaths = sigmaS[t];
+        if (totalPaths == 0.0) return {false, 0.0};
+        double fraction = pathsThroughV / totalPaths;
+        return {pathsThroughV > 0.0, fraction};
     }
 
-    // Public wrapper: take emails, map -> tokens, build reverse graph, call isOnShortestPath
     pair<bool,double> isOnShortestPathByEmail(const string &sEmail, const string &tEmail, const string &vEmail) {
-        if (emailToToken.find(sEmail) == emailToToken.end()) 
-            throw invalid_argument("Source email not found: " + sEmail);
-        if (emailToToken.find(tEmail) == emailToToken.end()) 
-            throw invalid_argument("Target email not found: " + tEmail);
-        if (emailToToken.find(vEmail) == emailToToken.end()) 
-            throw invalid_argument("Candidate (v) email not found: " + vEmail);
-
-        string s = emailToToken[sEmail];
-        string t = emailToToken[tEmail];
-        string v = emailToToken[vEmail];
-
-        auto rgraph = buildReverseGraph();
-        return isOnShortestPath(s, t, v, graph, rgraph);
+        if (emailToToken.find(sEmail) == emailToToken.end()) throw invalid_argument("Source email not found: " + sEmail);
+        if (emailToToken.find(tEmail) == emailToToken.end()) throw invalid_argument("Target email not found: " + tEmail);
+        if (emailToToken.find(vEmail) == emailToToken.end()) throw invalid_argument("Candidate email not found: " + vEmail);
+        string s = emailToToken[sEmail], t = emailToToken[tEmail], v = emailToToken[vEmail];
+        return isOnShortestPath(s, t, v, graph, buildReverseGraph());
     }
 
-    vector<string> findRootReferrer() {
-
-        vector<string> directReferrals;
-        unordered_set<string> visited;
-        for (auto &email : tokenToEmail) {
-            string token = email.first;
-            if (indegree_zero.count(token) > 0) {
-
-
-                stack<string> s;
-                s.push(token);
-                directReferrals.push_back(tokenToEmail[token]);
-
-                while (!s.empty()) {
-                    string current = s.top();
-                    s.pop();
-
-                    if (visited.count(current)) continue;
-                    visited.insert(current);
-
-                    for (const auto& child : graph[current]) {
-                        s.push(child);
-                    }
-                }
-
-                if (visited.size() == tokenToEmail.size()) {
-                    break;
-                }
-            }
-        }
-
-        return directReferrals; // No such referrer found
-    }
-
-    // Add user by email, generate and store token
-    void addUser(const string& email) {
+    // Add a new user by email. Will generate a token deterministically.
+    void addUser(const string &email) {
         if (emailToToken.find(email) != emailToToken.end()) {
-            cout << "User already exists: " << email << endl;
+            cout << "User already exists: " << email << "\n";
             return;
         }
+        string token = makeToken(email);
 
-        string token = generateToken(email);
-
-        if (graph.find(token) != graph.end()) {
-            throw runtime_error("Hash collision detected for token: " + token);
+        // In very rare case of collision, append numeric suffix until unique.
+        int suffix = 1;
+        while (graph.find(token) != graph.end()) {
+            token = makeToken(email) + "_c" + to_string(suffix++);
         }
 
         graph[token] = {};
         tokenToEmail[token] = email;
         emailToToken[email] = token;
-        size[token]=1;
+
+        compSize[token] = 1;
         parent[token] = token;
-        indegree_zero.insert(token); // add to indegree zero set
-        // initialize referral count
+        indegreeZero.insert(token);
+
         referralCount[token] = 0;
     }
 
-    // Get referral count by email (direct + indirect descendants)
-    int getRefferalCount(const string& email) {
-        if (emailToToken.find(email) == emailToToken.end()) {
-            throw invalid_argument("User not found: " + email);
-        }
-        string token = emailToToken[email];
-        // return stored referral count (O(1))
-        return referralCount[token];
+    // Get direct+indirect referral count stored for an email's token
+    int getRefferalCount(const string &email) const {
+        auto it = emailToToken.find(email);
+        if (it == emailToToken.end()) throw invalid_argument("User not found: " + email);
+        const string &token = it->second;
+        auto it2 = referralCount.find(token);
+        if (it2 == referralCount.end()) return 0;
+        return it2->second;
     }
 
-    // Add referral link by emails
-    void addReferralByEmail(const string& referrerEmail, const string& candidateEmail) {
+    // Add a directed referral (referrerEmail -> candidateEmail). Enforces constraints.
+    void addReferralByEmail(const string &referrerEmail, const string &candidateEmail) {
         if (emailToToken.find(referrerEmail) == emailToToken.end() ||
             emailToToken.find(candidateEmail) == emailToToken.end()) {
             throw invalid_argument("Both users must be added before creating referral.");
         }
+        string refToken = emailToToken[referrerEmail];
+        string candToken = emailToToken[candidateEmail];
 
-        string referrerToken = emailToToken[referrerEmail];
-        string candidateToken = emailToToken[candidateEmail];
+        if (refToken == candToken) throw invalid_argument("Self-referrals are not allowed.");
+        if (referredBy.find(candToken) != referredBy.end()) throw invalid_argument("Candidate already has a referrer.");
+        if (!dsu_union(refToken, candToken)) throw invalid_argument("Adding this referral would create a cycle.");
 
-        if (referrerToken == candidateToken) {
-            throw invalid_argument("Self-referrals are not allowed.");
-        }
+        // add edge
+        graph[refToken].push_back(candToken);
+        referredBy[candToken] = refToken;
+        indegreeZero.erase(candToken);
 
-        if (referredBy.find(candidateToken) != referredBy.end()) {
-            throw invalid_argument("Candidate already has a referrer.");
-        }
-
-        if (!unionSet(referrerToken, candidateToken)) {
-            throw invalid_argument("Adding this referral would create a cycle.");
-        }
-
-        // Add edge in directed graph
-
-        graph[referrerToken].push_back(candidateToken);
-        referredBy[candidateToken] = referrerToken;
-        indegree_zero.erase(candidateToken);
-
-        // Update referralCount for referrer and all its ancestors
-        string cur = referrerToken;
+        // update referral counts up the ancestor chain of refToken
+        string cur = refToken;
         while (true) {
-            long long count=getRefferalCount(tokenToEmail[cur]);
-            if(count > 0) {
-                referaltotoken[count].erase(cur);
-                if (referaltotoken[count].empty()) {
-                    referaltotoken.erase(count);   // optional: clean up empty set
-                }
-            }
-            referralCount[cur] += 1;
-            // if(referralCount[cur] > 0) {
-                referaltotoken[referralCount[cur]].insert(cur);
-            // }
+            int oldCount = referralCount[cur];
+            if (oldCount > 0) removeFromReferalBucket(oldCount, cur);
+            referralCount[cur] = oldCount + 1;
+            referaltotoken[referralCount[cur]].insert(cur);
 
-            if (referredBy.find(cur) == referredBy.end()) break; // reached top/root
+            if (referredBy.find(cur) == referredBy.end()) break;
             cur = referredBy[cur];
         }
     }
 
-    unordered_set<string> topKReferrers(int k) {
-        if(k>referredBy.size()) {
-            throw invalid_argument("k exceeds the number of users.");
-        }
-        if (k <= 0) {
-            return {}; // return empty vector for non-positive k
-        }
-        unordered_set<string> result;
-        for (const auto& entry : referaltotoken) {
-            if (entry.first > 0) { // only consider positive referral counts
-                for (const auto& token : entry.second) {
-                    result.insert(tokenToEmail[token]);
-                    if (result.size() == k) return result; // return top k
-                }
+    // Return direct referrals (emails) for an email
+    vector<string> getDirectReferralsByEmail(const string &email) const {
+        vector<string> out;
+        auto it = emailToToken.find(email);
+        if (it == emailToToken.end()) return out;
+        const string &token = it->second;
+        auto it2 = graph.find(token);
+        if (it2 == graph.end()) return out;
+        for (const string &childToken : it2->second) out.push_back(tokenToEmail.at(childToken));
+        return out;
+    }
+
+    // Return top-k referrers (by stored referral count) as emails.
+    unordered_set<string> topKReferrers(int k) const {
+        if (k <= 0) return {};
+        // Note: if referredBy.size() is used to check bounds elsewhere, we keep current behavior
+        unordered_set<string> res;
+        for (const auto &entry : referaltotoken) {
+            if (entry.first <= 0) continue;
+            for (const auto &tok : entry.second) {
+                res.insert(tokenToEmail.at(tok));
+                if ((int)res.size() == k) return res;
             }
         }
-        return result; // return all if less than k
+        return res;
     }
 
-    // Get direct referrals by email
-    vector<string> getDirectReferralsByEmail(const string& email) {
-        if (emailToToken.find(email) == emailToToken.end()) {
-            return {};
-        }
-
-        string token = emailToToken[email];
-        vector<string> result;
-        for (const auto& referralToken : graph[token]) {
-            result.push_back(tokenToEmail[referralToken]);
-        }
-        return result;
-    }
-
-    vector<long double> simulate(long double p, int days, int initial_referrers = 100, int capacity = 10) {
+    // returns vector cumulative where cumulative[d] = expected cumulative referrals by end of day d
+    vector<long double> simulate(long double p, int days, int initialReferrers = 100, int capacity = 10) const {
         if (days < 0) return {};
-        vector<long double> cumulative(days + 1, 0.0L); // cum[0] = 0
+        vector<long double> cumulative(days + 1, 0.0L); // index 0 = 0
         if (days == 0) return cumulative;
 
-        // Precompute cdf[t] = P(Binomial(t, p) < capacity) for t=0..days
+        // Precompute cdf[t] = P(Binomial(t, p) < capacity) for t = 0..days
         vector<long double> cdf(days + 1, 0.0L);
         long double q = 1.0L - p;
         for (int t = 0; t <= days; ++t) {
             if (p == 1.0L) {
-                // Binomial(t,1) = t deterministically
                 cdf[t] = (t < capacity) ? 1.0L : 0.0L;
                 continue;
             }
             if (p == 0.0L) {
-                // Binomial(t,0) = 0
-                cdf[t] = 1.0L; // 0 < capacity always
+                cdf[t] = 1.0L;
                 continue;
             }
-            // compute sum_{k=0..min(capacity-1,t)} C(t,k) p^k q^(t-k)
             long double pmf = powl(q, t); // k=0
-            long double sum = 0.0L;
+            long double sum = pmf;
             int upto = min(capacity - 1, t);
-            sum += pmf;
             for (int k = 1; k <= upto; ++k) {
-                // pmf(t,k) = pmf(t,k-1) * (t - k + 1) / k * p/q
-                pmf = pmf * ( (long double)(t - k + 1) / (long double)k ) * (p / q);
+                pmf = pmf * ((long double)(t - k + 1) / (long double)k) * (p / q);
                 sum += pmf;
             }
             cdf[t] = sum;
         }
 
-        // cohort[s] = expected number of referrers that start on day s (1-based). cohort[1] = initial_referrers.
+        // cohorts: cohort[s] = expected number of referrers that start on day s (1-based)
         vector<long double> cohort(days + 2, 0.0L);
-        cohort[1] = (long double)initial_referrers;
+        cohort[1] = (long double)initialReferrers;
 
         long double cum = 0.0L;
-        // optional window optimization: find t where cdf[t] < eps
         const long double EPS = 1e-18L;
         int windowCut = days;
         for (int t = 0; t <= days; ++t) {
@@ -377,134 +305,177 @@ public:
             long double new_successes = 0.0L;
             int smin = max(1, d - windowCut);
             for (int s = smin; s <= d; ++s) {
-                int tprev = d - s; // number of previous trials for cohort started at s before today's trial
-                long double add = cohort[s] * p * cdf[tprev];
-                new_successes += add;
+                int pastTrials = d - s;
+                new_successes += cohort[s] * p * cdf[pastTrials];
             }
             cum += new_successes;
             cumulative[d] = cum;
-            if (d + 1 <= days + 1) cohort[d + 1] = new_successes; // new cohort starts next day
+            if (d + 1 <= days + 1) cohort[d + 1] = new_successes;
         }
 
         return cumulative;
     }
 
-    // days_to_target: simulate until cumulative >= target_total or until max_days_limit reached.
-    // Returns day index (1-based) or -1 if not reached within limit.
-    int days_to_target(long double p, long double target_total, int initial_referrers = 100, int capacity = 10, int max_days_limit = 100000) {
+
+    int days_to_target(long double p, long double target_total,
+                       int initialReferrers = 100, int capacity = 10,
+                       int max_days_limit = 100000) const {
         if (target_total <= 0.0L) return 0;
         if (p < 0.0L || p > 1.0L) throw invalid_argument("p must be in [0,1]");
 
-        // Precompute cdf up to max_days_limit
         int maxT = max_days_limit;
         vector<long double> cdf(maxT + 1, 0.0L);
         long double q = 1.0L - p;
         for (int t = 0; t <= maxT; ++t) {
-            if (p == 1.0L) {
-                cdf[t] = (t < capacity) ? 1.0L : 0.0L;
-                continue;
-            }
-            if (p == 0.0L) {
-                cdf[t] = 1.0L;
-                continue;
-            }
+            if (p == 1.0L) { cdf[t] = (t < capacity) ? 1.0L : 0.0L; continue; }
+            if (p == 0.0L) { cdf[t] = 1.0L; continue; }
             long double pmf = powl(q, t);
-            long double sum = 0.0L;
+            long double sum = pmf;
             int upto = min(capacity - 1, t);
-            sum += pmf;
             for (int k = 1; k <= upto; ++k) {
-                pmf = pmf * ( (long double)(t - k + 1) / (long double)k ) * (p / q);
+                pmf = pmf * ((long double)(t - k + 1) / (long double)k) * (p / q);
                 sum += pmf;
             }
             cdf[t] = sum;
         }
 
-        // cohort dynamic
         vector<long double> cohort;
         cohort.reserve(1024);
-        cohort.push_back(0.0L); // index 0 unused
-        cohort.push_back((long double)initial_referrers); // cohort[1]
+        cohort.push_back(0.0L);             // index 0 unused
+        cohort.push_back((long double)initialReferrers); // cohort[1]
 
         long double cum = 0.0L;
-
-        // we can also compute windowCut for early truncation
         const long double EPS = 1e-18L;
         int windowCut = maxT;
-        for (int t = 0; t <= maxT; ++t) {
-            if (cdf[t] < EPS) { windowCut = t; break; }
-        }
+        for (int t = 0; t <= maxT; ++t) if (cdf[t] < EPS) { windowCut = t; break; }
 
         for (int d = 1; d <= max_days_limit; ++d) {
-            // ensure cohort has entries up to d
-            if ((int)cohort.size() <= d) cohort.resize(d+1, 0.0L);
+            if ((int)cohort.size() <= d) cohort.resize(d + 1, 0.0L);
 
             long double new_successes = 0.0L;
             int smin = max(1, d - windowCut);
             for (int s = smin; s <= d && s < (int)cohort.size(); ++s) {
-                int tprev = d - s;
-                new_successes += cohort[s] * p * cdf[tprev];
+                int pastTrials = d - s;
+                new_successes += cohort[s] * p * cdf[pastTrials];
             }
 
             cum += new_successes;
-            cohort.push_back(new_successes); // cohort[d+1]
-
+            cohort.push_back(new_successes);
             if (cum >= target_total - 1e-12L) return d;
         }
 
-        return -1; // not reached within limit
+        return -1;
     }
 
-    // ----------------------- end simulation methods -----------------------
+    int min_bonus_for_target(int days,
+                             int target_hires,
+                             function<long double(int)> adoption_prob,
+                             long double eps = 1e-3L,
+                             int maxBonus = 10000000 /* 10M */) const {
+        if (days < 0 || target_hires <= 0) return 0;
+
+        // helper: decide if 'bonus' is sufficient
+        auto sufficient = [&](int bonus) -> bool {
+            long double p = adoption_prob(bonus);
+            if (p < 0.0L) p = 0.0L;
+            if (p > 1.0L) p = 1.0L;
+            int daysNeeded = days_to_target(p, (long double)target_hires, 100, 10, days);
+            return (daysNeeded != -1 && daysNeeded <= days);
+        };
+
+        // quick check zero bonus
+        if (sufficient(0)) return 0;
+
+        // exponential search to find an upper bound where sufficient(high) == true
+        int low = 0;
+        int high = 10;
+        int iter = 0;
+        const int MAX_EXP_ITER = 40;
+        while (high <= maxBonus && iter < MAX_EXP_ITER && !sufficient(high)) {
+            low = high;
+            high = high * 2;
+            ++iter;
+        }
+
+        if (high > maxBonus) {
+            if (!sufficient(maxBonus)) return -1;
+            high = maxBonus;
+        } else {
+            if (iter >= MAX_EXP_ITER && !sufficient(high)) return -1;
+        }
+
+        // binary search on multiples of $10; convert to k = bonus/10 integers
+        int lowK = (low + 9) / 10;
+        int highK = (high + 9) / 10;
+        while (lowK < highK) {
+            int midK = lowK + (highK - lowK) / 2;
+            int midBonus = midK * 10;
+            if (sufficient(midBonus)) highK = midK;
+            else lowK = midK + 1;
+        }
+        return highK * 10;
+    }
 };
 
 int main() {
     ReferralGraph g;
 
+    // create some users (keeps behavior identical to original)
     g.addUser("krish@gmail.com");
     g.addUser("bob@gmail.com");
     g.addUser("charlie@gmail.com");
     g.addUser("hj@gmail.com");
 
-    // Build referrals
+    // build referrals
     g.addReferralByEmail("krish@gmail.com", "hj@gmail.com");
     g.addReferralByEmail("bob@gmail.com", "charlie@gmail.com");
-    // Also connect krish -> bob to produce a path krish->bob->charlie
     g.addReferralByEmail("krish@gmail.com", "bob@gmail.com");
 
-    // Print direct referrals of krish
+    // direct referrals print
     auto referrals = g.getDirectReferralsByEmail("krish@gmail.com");
     cout << "krish@gmail.com referred: ";
-    for (const auto& r : referrals) {
-        cout << r << " ";
-    }
-    cout << endl;
+    for (auto &r : referrals) cout << r << " ";
+    cout << "\n";
 
-    cout << "krish total referrals: " << g.getRefferalCount("krish@gmail.com") << endl;
-    cout << "bob total referrals: " << g.getRefferalCount("bob@gmail.com") << endl;
-    cout << "charlie total referrals: " << g.getRefferalCount("charlie@gmail.com") << endl;
+    cout << "krish total referrals: " << g.getRefferalCount("krish@gmail.com") << "\n";
+    cout << "bob total referrals: " << g.getRefferalCount("bob@gmail.com") << "\n";
+    cout << "charlie total referrals: " << g.getRefferalCount("charlie@gmail.com") << "\n";
 
-    // Now check some s, t, v triples
+    // shortest path checks (demo)
     cout << fixed << setprecision(4);
     auto res1 = g.isOnShortestPathByEmail("krish@gmail.com", "charlie@gmail.com", "bob@gmail.com");
-    cout << "Is 'bob' on a shortest path krish->charlie? " << (res1.first ? "YES" : "NO") 
-         << "  fraction=" << res1.second << "\n";
-
+    cout << "Is 'bob' on a shortest path krish->charlie? " << (res1.first ? "YES" : "NO") << " fraction=" << res1.second << "\n";
     auto res2 = g.isOnShortestPathByEmail("krish@gmail.com", "charlie@gmail.com", "hj@gmail.com");
-    cout << "Is 'hj' on a shortest path krish->charlie? " << (res2.first ? "YES" : "NO") 
-         << "  fraction=" << res2.second << "\n";
+    cout << "Is 'hj' on a shortest path krish->charlie? " << (res2.first ? "YES" : "NO") << " fraction=" << res2.second << "\n";
 
-    // Demonstrate simulation
+    // simulate example
     long double p = 0.2L;
     int days = 30;
     auto cum = g.simulate(p, days);
     cout << "\nSimulation (expected cumulative referrals):\n";
-    for (int d = 0; d <= days; ++d) {
-        cout << "Day " << d << ": " << (double)cum[d] << "\n";
-    }
+    for (int d = 0; d <= days; ++d) cout << "Day " << d << ": " << (double)cum[d] << "\n";
 
+    // days_to_target example
     long double target = 50.0L;
     int need = g.days_to_target(p, target, 100, 10, 10000);
     cout << "\nDays to reach expected target " << target << ": " << need << "\n";
+
+    // demo adoption_prob (monotonic), then compute min_bonus_for_target
+    auto adoption_prob_demo = [](int bonus)->long double {
+        long double b = (long double)bonus;
+        long double p_ = 0.95L * (1.0L - expl(-b / 100.0L)); // simple demo mapping
+        if (p_ < 0.0L) p_ = 0.0L;
+        if (p_ > 1.0L) p_ = 1.0L;
+        return p_;
+    };
+
+    int target_hires = 50;
+    int minBonus = g.min_bonus_for_target(days, target_hires, adoption_prob_demo, 1e-3L, 1000000);
+    if (minBonus >= 0) {
+        cout << "\nMinimum bonus (rounded to $10) to reach " << target_hires << " expected hires in " << days << " days: $" << minBonus << "\n";
+    } else {
+        cout << "\nTarget not achievable within maxBonus limit.\n";
+    }
 
     return 0;
 }
