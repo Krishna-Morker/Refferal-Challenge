@@ -8,6 +8,7 @@
 #include <queue>
 #include <string>
 #include <iomanip>
+#include <cmath> // added for powl
 
 using namespace std;
 
@@ -327,6 +328,144 @@ public:
         }
         return result;
     }
+
+    // ----------------------- New: Network growth simulation -----------------------
+    // Model parameters fixed per the spec:
+    // - initial referrers: 100
+    // - capacity per referrer (lifetime successes): 10
+    // - each active referrer attempts one trial per day with probability p
+    //
+    // simulate(p, days): returns vector<long double> cum of size days+1 where cum[i] is
+    // cumulative expected referrals at end of day i (cum[0] == 0).
+    //
+    // days_to_target(p, target_total, max_days_limit=100000): returns minimal day d such that
+    // cumulative expected referrals >= target_total, or -1 if not reached within limit.
+    vector<long double> simulate(long double p, int days, int initial_referrers = 100, int capacity = 10) {
+        if (days < 0) return {};
+        vector<long double> cumulative(days + 1, 0.0L); // cum[0] = 0
+        if (days == 0) return cumulative;
+
+        // Precompute cdf[t] = P(Binomial(t, p) < capacity) for t=0..days
+        vector<long double> cdf(days + 1, 0.0L);
+        long double q = 1.0L - p;
+        for (int t = 0; t <= days; ++t) {
+            if (p == 1.0L) {
+                // Binomial(t,1) = t deterministically
+                cdf[t] = (t < capacity) ? 1.0L : 0.0L;
+                continue;
+            }
+            if (p == 0.0L) {
+                // Binomial(t,0) = 0
+                cdf[t] = 1.0L; // 0 < capacity always
+                continue;
+            }
+            // compute sum_{k=0..min(capacity-1,t)} C(t,k) p^k q^(t-k)
+            long double pmf = powl(q, t); // k=0
+            long double sum = 0.0L;
+            int upto = min(capacity - 1, t);
+            sum += pmf;
+            for (int k = 1; k <= upto; ++k) {
+                // pmf(t,k) = pmf(t,k-1) * (t - k + 1) / k * p/q
+                pmf = pmf * ( (long double)(t - k + 1) / (long double)k ) * (p / q);
+                sum += pmf;
+            }
+            cdf[t] = sum;
+        }
+
+        // cohort[s] = expected number of referrers that start on day s (1-based). cohort[1] = initial_referrers.
+        vector<long double> cohort(days + 2, 0.0L);
+        cohort[1] = (long double)initial_referrers;
+
+        long double cum = 0.0L;
+        // optional window optimization: find t where cdf[t] < eps
+        const long double EPS = 1e-18L;
+        int windowCut = days;
+        for (int t = 0; t <= days; ++t) {
+            if (cdf[t] < EPS) { windowCut = t; break; }
+        }
+
+        for (int d = 1; d <= days; ++d) {
+            long double new_successes = 0.0L;
+            int smin = max(1, d - windowCut);
+            for (int s = smin; s <= d; ++s) {
+                int tprev = d - s; // number of previous trials for cohort started at s before today's trial
+                long double add = cohort[s] * p * cdf[tprev];
+                new_successes += add;
+            }
+            cum += new_successes;
+            cumulative[d] = cum;
+            if (d + 1 <= days + 1) cohort[d + 1] = new_successes; // new cohort starts next day
+        }
+
+        return cumulative;
+    }
+
+    // days_to_target: simulate until cumulative >= target_total or until max_days_limit reached.
+    // Returns day index (1-based) or -1 if not reached within limit.
+    int days_to_target(long double p, long double target_total, int initial_referrers = 100, int capacity = 10, int max_days_limit = 100000) {
+        if (target_total <= 0.0L) return 0;
+        if (p < 0.0L || p > 1.0L) throw invalid_argument("p must be in [0,1]");
+
+        // Precompute cdf up to max_days_limit
+        int maxT = max_days_limit;
+        vector<long double> cdf(maxT + 1, 0.0L);
+        long double q = 1.0L - p;
+        for (int t = 0; t <= maxT; ++t) {
+            if (p == 1.0L) {
+                cdf[t] = (t < capacity) ? 1.0L : 0.0L;
+                continue;
+            }
+            if (p == 0.0L) {
+                cdf[t] = 1.0L;
+                continue;
+            }
+            long double pmf = powl(q, t);
+            long double sum = 0.0L;
+            int upto = min(capacity - 1, t);
+            sum += pmf;
+            for (int k = 1; k <= upto; ++k) {
+                pmf = pmf * ( (long double)(t - k + 1) / (long double)k ) * (p / q);
+                sum += pmf;
+            }
+            cdf[t] = sum;
+        }
+
+        // cohort dynamic
+        vector<long double> cohort;
+        cohort.reserve(1024);
+        cohort.push_back(0.0L); // index 0 unused
+        cohort.push_back((long double)initial_referrers); // cohort[1]
+
+        long double cum = 0.0L;
+
+        // we can also compute windowCut for early truncation
+        const long double EPS = 1e-18L;
+        int windowCut = maxT;
+        for (int t = 0; t <= maxT; ++t) {
+            if (cdf[t] < EPS) { windowCut = t; break; }
+        }
+
+        for (int d = 1; d <= max_days_limit; ++d) {
+            // ensure cohort has entries up to d
+            if ((int)cohort.size() <= d) cohort.resize(d+1, 0.0L);
+
+            long double new_successes = 0.0L;
+            int smin = max(1, d - windowCut);
+            for (int s = smin; s <= d && s < (int)cohort.size(); ++s) {
+                int tprev = d - s;
+                new_successes += cohort[s] * p * cdf[tprev];
+            }
+
+            cum += new_successes;
+            cohort.push_back(new_successes); // cohort[d+1]
+
+            if (cum >= target_total - 1e-12L) return d;
+        }
+
+        return -1; // not reached within limit
+    }
+
+    // ----------------------- end simulation methods -----------------------
 };
 
 int main() {
@@ -365,6 +504,18 @@ int main() {
     cout << "Is 'hj' on a shortest path krish->charlie? " << (res2.first ? "YES" : "NO") 
          << "  fraction=" << res2.second << "\n";
 
- 
+    // Demonstrate simulation
+    long double p = 0.2L;
+    int days = 30;
+    auto cum = g.simulate(p, days);
+    cout << "\nSimulation (expected cumulative referrals):\n";
+    for (int d = 0; d <= days; ++d) {
+        cout << "Day " << d << ": " << (double)cum[d] << "\n";
+    }
+
+    long double target = 50.0L;
+    int need = g.days_to_target(p, target, 100, 10, 10000);
+    cout << "\nDays to reach expected target " << target << ": " << need << "\n";
+
     return 0;
 }
