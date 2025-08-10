@@ -91,28 +91,3 @@ Finds minimum bonus where:
 math
 days\_to\_target(p(bonus), target) ≤ deadline
 Uses adoption probability function: p = f(bonus)
-
-Example Use Cases
-Referral Program Management
-
-Track direct/indirect referrals
-
-Identify top performers
-
-Growth Forecasting
-
-Predict referral adoption over time
-
-Model different probability scenarios
-
-Incentive Design
-
-Determine optimal bonuses
-
-Balance cost vs. growth targets
-
-Network Analysis
-
-Identify key influencers in referral chains
-
-Analyze information flow pathways
